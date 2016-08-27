@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "aws-sdk": "~2.2.43",
+    "babel-plugin-add-module-exports": "^0.2.1",
     "babel-plugin-check-es2015-constants": "^6.8.0",
     "babel-plugin-external-helpers-2": "^6.3.13",
     "babel-plugin-feature-flags": "~0.3.0",
@@ -37,6 +38,7 @@
     "babel-plugin-transform-es2015-spread": "^6.8.0",
     "babel-plugin-transform-es2015-template-literals": "^6.8.0",
     "babel-plugin-transform-proto-to-assign": "^6.9.0",
+    "backburner.js": "^0.3.1",
     "bower": "~1.7.7",
     "broccoli-babel-transpiler": "6.0.0-alpha.1",
     "broccoli-file-creator": "^1.1.1",
