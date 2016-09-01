@@ -16,8 +16,8 @@ if (isEnabled('ember-glimmer-detect-backtracking-rerender') ||
     isEnabled('ember-glimmer-allow-backtracking-rerender')) {
   runInTransaction = _runInTransaction;
 } else {
-  runInTransaction = callback => {
-    callback();
+  runInTransaction = (context, methodName) => {
+    context[methodName]();
     return false;
   };
 }
@@ -43,6 +43,8 @@ class DynamicScope {
 let nextRootId = 0;
 class RootState {
   constructor(env, root, template, self, parentElement, dynamicScope) {
+    assert(`You cannot render \`${self.value()}\` without a template.`, template);
+
     this.id = ++nextRootId;
     this.env = env;
     this.root = root;
@@ -55,7 +57,6 @@ class RootState {
       alwaysRevalidate: false
     };
     this.render = this.initialRender;
-    this.lastRevision = undefined;
     this.result = undefined;
   }
 
@@ -64,14 +65,10 @@ class RootState {
   }
 
   initialRender() {
-    let { self, template, env, parentElement, dynamicScope } = this;
-    assert(`You cannot render \`${self.value()}\` without a template.`, template);
-
-    this.result = this.template.asEntryPoint().render(self, env, {
-      appendTo: parentElement,
-      dynamicScope
+    this.result = this.template.asEntryPoint().render(this.self, this.env, {
+      appendTo: this.parentElement,
+      dynamicScope: this.dynamicScope
     });
-    this.lastRevision = CURRENT_TAG.value();
 
     // change next render to use `rerender`
     this.render = this.rerender;
@@ -79,7 +76,6 @@ class RootState {
 
   rerender() {
     this.result.rerender(this.options);
-    this.lastRevision = CURRENT_TAG.value();
   }
 
   destroy() {
@@ -91,8 +87,9 @@ class RootState {
     this.self = null;
     this.parentElement = null;
     this.dynamicScope = null;
-    this.lastRevision = null;
     this.result = null;
+    this.options = null;
+    this.render = null;
 
     if (result) {
       result.destroy();
@@ -150,7 +147,8 @@ export class Renderer {
     this._viewRegistry = _viewRegistry;
     this._destinedForDOM = destinedForDOM;
     this._destroyed = false;
-    this._root = null;
+    this._roots = [];
+    this._lastRevision = null;
     this._transaction = null;
   }
 
@@ -203,8 +201,20 @@ export class Renderer {
     view.trigger('willClearRender');
     view._transitionTo('destroying');
 
-    if (this._root && this._root.isFor(view)) {
-      this._clearRoot();
+    let roots = this._roots;
+
+    // traverse in reverse so we can remove items
+    // without mucking up the index
+    for (let i = this._roots.length - 1; i > -1; i--) {
+      let root = roots[i];
+      if (root.isFor(view)) {
+        root.destroy();
+        roots.splice(i, 1);
+      }
+    }
+
+    if (this._roots.length === 0) {
+      deregister(this);
     }
 
     if (!view.isDestroying) {
@@ -217,7 +227,7 @@ export class Renderer {
       return;
     }
     this._destroyed = true;
-    this._clearRoot();
+    this._clearAllRoots();
   }
 
   getBounds(view) {
@@ -235,20 +245,28 @@ export class Renderer {
   }
 
   _renderRoot(root) {
-    assert('Cannot append multiple root views', !this._root);
+    let { _roots: roots, _env: env } = this;
 
-    let { _env: env } = this;
+    roots.push(root);
 
-    this._root = root;
-
-    register(this);
+    if (roots.length === 1) {
+      register(this);
+    }
 
     let transaction = () => {
       let shouldReflush = false;
       do {
         env.begin();
-        root.options.alwaysRevalidate = shouldReflush;
-        shouldReflush = runInTransaction(root, 'render');
+
+        for (let i = 0; i < roots.length; i++) {
+          let root = roots[i];
+
+          root.options.alwaysRevalidate = shouldReflush;
+          shouldReflush = runInTransaction(root, 'render');
+        }
+
+        this._lastRevision = CURRENT_TAG.value();
+
         env.commit();
       } while (shouldReflush);
     };
@@ -265,14 +283,17 @@ export class Renderer {
     this._transaction();
   }
 
-  _clearRoot() {
-    let root = this._root;
-    this._root = null;
+  _clearAllRoots() {
+    let roots = this._roots;
+    for (let i = 0; i < roots.length; i++) {
+      let root = roots[i];
+      root.destroy();
+    }
+    this._roots = null;
     this._transaction = null;
 
-    if (root) {
+    if (roots.length) {
       deregister(this);
-      root.destroy();
     }
   }
 
@@ -281,7 +302,7 @@ export class Renderer {
   }
 
   _isValid() {
-    return !this._root || CURRENT_TAG.validate(this._root.lastRevision);
+    return this._destroyed || this._roots.length === 0 || CURRENT_TAG.validate(this._lastRevision);
   }
 
   _revalidate() {
